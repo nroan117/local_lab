@@ -7,107 +7,164 @@ This workspace scaffolds a lightweight local environment to develop and test a R
 - DCGM-mock server that exposes Prometheus-style GPU metrics at `/metrics`
 - Rightsizer collector (Job/CronJob) that queries Prometheus and writes an HTML report to `/reports/latest`
 - An optional NGINX deployment to serve the reports from the PVC
+# Rightsizer Local Test Lab
 
+A small local lab for developing and testing the Rightsizer collector with:
 
-Quick steps (macOS / zsh):
+- kind (single-node Kubernetes)
+- Prometheus (single pod)
+- A dcgm-mock server that exposes Prometheus-format GPU metrics at `/metrics`
+- A collector that queries Prometheus and writes an HTML report to `/reports/latest`
+- An optional nginx to serve the reports from a PVC
 
-1. Build images locally (or change IMAGE_PREFIX in `Makefile`):
+This README gives minimal, copy-paste commands to get started, verify, run a smoke test, switch fixtures, and tear everything down.
+
+## Prerequisites (macOS / zsh)
+
+- Docker Desktop
+- kind
+- kubectl
+- jq (optional, for prettier JSON): `brew install jq`
+
+If you use Homebrew you can install: `brew install kind kubectl jq`.
+
+## Quick start
+
+1. Build local images
 
 ```bash
-cd new-rightsizer-local
+cd /path/to/local_lab
 make build-images
 ```
 
-2. Create a kind single-node cluster:
+2. Create (or reuse) a kind cluster
 
 ```bash
 make kind-create
 ```
 
-3. Load built images into kind (run after cluster is ready):
-
-```bash
-make load-images
-```
-
-Tip: to avoid intermittent ImagePullBackOff when re-running the pipeline, use the new verification target which loads images and checks they exist inside the kind node:
+3. Load local images into kind
 
 ```bash
 make load-images-verify
+# or: make load-images
 ```
 
-`make load-images-verify` will run the same loads as `make load-images` and then confirm the images are present inside containerd on the kind node. If verification fails it will print helpful remediation steps.
-
-4. Apply Kubernetes manifests (this will create StorageClass/PV/PVC, Prometheus, dcgm-mock, collector CronJob, and nginx):
+4. Deploy k8s manifests
 
 ```bash
 kubectl apply -k k8s/
 ```
 
-5. Verify Prometheus and dcgm-mock are running:
+5. Port-forward services to view locally
 
 ```bash
-kubectl get pods -l app=prometheus
-kubectl get pods -l app=dcgm-mock
+# Prometheus UI
 kubectl port-forward svc/prometheus 9090:9090 &
+# NGINX (reports)
+kubectl port-forward svc/rightsizer-nginx 8080:80 &
 ```
 
-Open http://localhost:9090 and use the expression `DCGM_FI_DEV_GPU_UTIL` to inspect metrics.
+Open in your browser:
 
-6. Rotate fixtures on dcgm-mock (optional)
+- Prometheus: http://localhost:9090
+- Reports: http://localhost:8080/latest/ and http://localhost:8080/smoke/
 
-You can change the fixture the mock serves by setting the `DCGM_FIXTURE` env var on the Deployment, or by curling the `/metrics?f=...` path directly from inside the cluster. Examples: `idle`, `low`, `bursty`, `mem`.
+Note: a request to `http://localhost:8080/` may return `403 Forbidden` because directory listing is disabled. Use the specific report paths above.
 
-7. Trigger the collector once (or wait for CronJob):
+## Verify Prometheus and metrics
+
+- Check Prometheus responds (GET, not HEAD):
+
+```bash
+curl -s http://localhost:9090 | sed -n '1,6p'
+```
+
+- Query a sample metric:
+
+```bash
+curl -s "http://localhost:9090/api/v1/query?query=DCGM_FI_DEV_GPU_UTIL" | jq .
+```
+
+## Run the collector or smoke test
+
+- Trigger the collector once (runs the same logic as the CronJob):
 
 ```bash
 kubectl create job --from=cronjob/rightsizer-cron rightsizer-manual-$(date +%s)
-kubectl logs -f job/rightsizer-run-once
+kubectl logs -f job/$(kubectl get jobs -o jsonpath='{.items[-1].metadata.name}')
 ```
 
-8. Serve reports with nginx and view them locally:
-
-```bash
-kubectl port-forward svc/rightsizer-nginx 8080:80
-# open http://localhost:8080/
-```
-
-Smoke validation
-----------------
-
-After deploying, you can run the included smoke Job which:
-- pulls the first lines of `/metrics` from `dcgm-mock`
-- queries Prometheus for `DCGM_FI_DEV_GPU_UTIL`
-- writes the results to the reports PVC under `/reports/smoke`
-
-Run it with:
+- Run the smoke-check job (small validation):
 
 ```bash
 kubectl create job --from=job/rightsizer-smoke-check rightsizer-smoke-$(date +%s)
-kubectl logs -f job/rightsizer-smoke-check
+kubectl logs -f job/$(kubectl get jobs -o jsonpath='{.items[-1].metadata.name}')
 ```
 
-Then view the files via nginx (after port-forward) at `/smoke/`.
+After the jobs complete, view smoke outputs at:
 
-Verification & expected metrics names:
+- http://localhost:8080/smoke/
+- http://localhost:8080/smoke/status.txt
 
-- GPU utilization: `DCGM_FI_DEV_GPU_UTIL{gpu="<id>"}`
-- FB memory used: `DCGM_FI_DEV_FB_USED{gpu="<id>"}`
-- FB memory total: `DCGM_FI_DEV_FB_TOTAL{gpu="<id>"}`
+## Switch dcgm-mock fixture (quick iteration)
 
-If you want to test deterministic conditions, edit the files under `dcgm-mock/fixtures/` then rebuild and reload the image or point Prometheus directly to the mock's pod IP (for fast iteration).
-
-Fixture switching helper:
+You can change which fixture `dcgm-mock` serves without rebuilding the image:
 
 ```bash
 ./scripts/switch-fixture.sh low
+# or: ./scripts/switch-fixture.sh idle
 ```
 
+This patches the `dcgm-mock` Deployment's `DCGM_FIXTURE` env var.
 
+## Teardown (clean local environment)
 
-Notes:
-- The mock server includes fixtures for idle, low, bursty and memory-heavy workloads under `dcgm-mock/fixtures/`.
-- For persistence we use a hostPath-backed PersistentVolume and a PVC mounted at `/reports` for the collector and nginx.
-- This repo intentionally keeps things simple (single-pod Prometheus, static PV) to be lightweight for local development.
+1) Stop port-forwards (on macOS / zsh):
 
-See `Makefile` for convenience targets.
+```bash
+ps aux | grep 'kubectl port-forward' | grep -v grep
+# kill <PID>
+# or
+pkill -f 'kubectl port-forward'
+```
+
+2) Remove k8s resources applied by this lab:
+
+```bash
+kubectl delete -k k8s/
+```
+
+3) Optionally delete all jobs and pods (force):
+
+```bash
+kubectl delete job --all
+kubectl delete pod --all --grace-period=0 --force || true
+```
+
+4) Delete the kind cluster:
+
+```bash
+kind delete cluster --name rightsizer-kind
+```
+
+5) Optionally remove local images:
+
+```bash
+docker rmi rightsizer-local/dcgm-mock:latest rightsizer-local/rightsizer-collector:latest rightsizer-local/rightsizer-nginx:latest || true
+```
+
+## Notes
+
+- Reports are written to a hostPath PV mounted at `/reports` in the cluster and served by nginx; check `k8s/storage/pv-pvc.yaml` for details.
+- If you encounter `ImagePullBackOff`, re-run `make load-images-verify` to ensure images are loaded into the kind node.
+- For deterministic testing, edit files in `dcgm-mock/fixtures/` and rebuild/reload the `dcgm-mock` image.
+
+## Troubleshooting
+
+- If Prometheus `curl -I` returns `405 Method Not Allowed` use a GET instead.
+- If nginx returns `403` for `/`, open `/latest/` or `/smoke/` directly.
+
+---
+
+That's it — the README is intentionally compact and action-oriented. If you'd like, I can add a one-line badge or a tiny diagram, or create a `scripts/start-all.sh` that runs the sequence automatically.
