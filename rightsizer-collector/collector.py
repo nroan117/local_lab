@@ -4,8 +4,27 @@ import requests
 from datetime import datetime
 import json
 import time
+import logging
+import sys
 
 PROM_URL = os.environ.get('PROMETHEUS_URL', 'http://prometheus:9090')
+# Allow overriding report path for local testing
+REPORT_PATH = os.environ.get('REPORT_PATH', '/reports/latest')
+
+
+# Configure root logger to output to stdout (useful inside k8s and locally)
+def configure_logging():
+  root = logging.getLogger()
+  if root.handlers:
+    return
+  handler = logging.StreamHandler(stream=sys.stdout)
+  fmt = '%(asctime)s %(levelname)s %(name)s: %(message)s'
+  handler.setFormatter(logging.Formatter(fmt))
+  root.setLevel(logging.INFO)
+  root.addHandler(handler)
+
+
+LOGGER = logging.getLogger('collector')
 
 
 def query(metric, timeout=10, retries=2, backoff=1.0):
@@ -133,6 +152,7 @@ def make_html(report_path, metrics_data):
 
   with open(os.path.join(report_path, 'index.html'), 'w') as f:
     f.write(html)
+  LOGGER.info('Wrote report to %s', os.path.join(report_path, 'index.html'))
 
 
 def build_report():
@@ -140,17 +160,23 @@ def build_report():
   results = {}
   for m in metrics:
     try:
+      LOGGER.info('Querying Prometheus for: %s', m)
       res = query(m)
       results[m] = res
+      LOGGER.debug('Result for %s: %s', m, json.dumps(res)[:200])
     except Exception as e:
+      LOGGER.exception('Query failed for %s', m)
       results[m] = {'error': str(e)}
   return results
 
 
 def main():
-  report_path = '/reports/latest'
+  configure_logging()
+  LOGGER.info('Starting collector')
+  report_path = REPORT_PATH
   metrics_data = build_report()
   make_html(report_path, metrics_data)
+  LOGGER.info('Collector finished')
 
 
 if __name__ == '__main__':
