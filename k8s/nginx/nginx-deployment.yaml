@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rightsizer-nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rightsizer-nginx
+  template:
+    metadata:
+      labels:
+        app: rightsizer-nginx
+    spec:
+      containers:
+        - name: nginx
+          image: rightsizer-local/rightsizer-nginx:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: reports
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: reports
+          persistentVolumeClaim:
+            claimName: reports-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rightsizer-nginx
+spec:
+  selector:
+    app: rightsizer-nginx
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP

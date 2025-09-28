@@ -1,0 +1,7 @@
+resources:
+  - storage/
+  - prometheus/
+  - dcgm-mock/
+  - collector/
+  - nginx/
+  - smoke/

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dcgm-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dcgm-mock
+  template:
+    metadata:
+      labels:
+        app: dcgm-mock
+    spec:
+      containers:
+        - name: dcgm-mock
+          image: rightsizer-local/dcgm-mock:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9100
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9100
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 1
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dcgm-mock
+spec:
+  selector:
+    app: dcgm-mock
+  ports:
+    - port: 9100
+      targetPort: 9100

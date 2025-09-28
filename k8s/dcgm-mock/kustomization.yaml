@@ -1,0 +1,2 @@
+resources:
+  - dcgm-mock-deployment.yaml

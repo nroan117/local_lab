@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rightsizer-sa
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rightsizer-run-once
+spec:
+  template:
+    metadata:
+      labels:
+        job: rightsizer
+    spec:
+      serviceAccountName: rightsizer-sa
+      restartPolicy: OnFailure
+      containers:
+        - name: rightsizer
+          image: rightsizer-local/rightsizer-collector:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/collector.py"]
+          volumeMounts:
+            - name: reports
+              mountPath: /reports
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+      volumes:
+        - name: reports
+          persistentVolumeClaim:
+            claimName: reports-pvc
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rightsizer-cron
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: rightsizer-sa
+          restartPolicy: OnFailure
+          containers:
+            - name: rightsizer
+              image: rightsizer-local/rightsizer-collector:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/usr/local/bin/collector.py"]
+              volumeMounts:
+                - name: reports
+                  mountPath: /reports
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "256Mi"
+          volumes:
+            - name: reports
+              persistentVolumeClaim:
+                claimName: reports-pvc
